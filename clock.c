@@ -1,7 +1,9 @@
-// Clock/calander programm for JY 3208 Clock from DX. 32*8 LED Matrix + HT1632C + ATmega8; 
+// Clock/calander programm for JY 3208 Clock from DX. 32*8 LED Matrix + HT1632C + ATmega8;
 //
 // Byoung Oh. 9/30/12
 // Based on code from DrJones
+// Modify 26/04/2016 by Anton Korenkov
+// Version 1.1
 //
 //
 // Key1 : Setup Button. Hold 3 sec to enter or exit setup mode. In setup mode, use to switch mode.
@@ -18,6 +20,10 @@
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
 
+// modify version 1.1 
+#include "rtc2.h"
+// end modify
+
 #define byte uint8_t
 #define word uint16_t
 
@@ -32,12 +38,12 @@ static const byte font[77][5] PROGMEM = {
 	{0x00, 0x82, 0xFF, 0x80, 0x00}, //  1          [1]
 	{0xC2, 0xA1, 0x91, 0x89, 0x86}, //  2          [2]
 	{0x42, 0x81, 0x89, 0x89, 0x76}, //  3          [3]
-	{0x18, 0x14, 0x12, 0xFF, 0x10}, //  4          [4]
+	{0x1F, 0x10, 0x10, 0x10, 0xFF}, //  4          [4]
 	{0x4F, 0x89, 0x89, 0x89, 0x71}, //  5          [5]
-	{0x78, 0x94, 0x92, 0x91, 0x61}, //  6          [6]
+	{0x7E, 0x89, 0x89, 0x89, 0x72}, //  6          [6]
 	{0x01, 0xF1, 0x09, 0x05, 0x03}, //  7          [7]
 	{0x76, 0x89, 0x89, 0x89, 0x76}, //  8          [8]
-	{0x0E, 0x91, 0x91, 0x51, 0x3E}, //  9          [9]
+	{0x4E, 0x91, 0x91, 0x91, 0x7E}, //  9          [9]
 	{0xFE, 0x11, 0x11, 0x11, 0xFE}, //  A          [10]
 	{0xFF, 0x89, 0x89, 0x89, 0x76}, //  B          [11]
 	{0x7E, 0x81, 0x81, 0x81, 0x42}, //  C          [12]
@@ -105,7 +111,7 @@ static const byte font[77][5] PROGMEM = {
 	{0x10, 0x38, 0x54, 0x10, 0x10}, //  L arrow    [74]
 	{0x22, 0x40, 0x48, 0x40, 0x22}, //  smile      [75]
 	{0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, //  5x8 block  [76]
-};                                                                
+};
 // Font Map End
 
 //pins and macros
@@ -123,7 +129,7 @@ static const byte font[77][5] PROGMEM = {
 #define HTdata0   HTport&=~(1<<HTdata)
 #define HTdata1   HTport|= (1<<HTdata)
 #define HTpinsetup() do{  HTddr |=(1<<HTstrobe)|(1<<HTclk)|(1<<HTdata); HTport|=(1<<HTstrobe)|(1<<HTclk)|(1<<HTdata);  }while(0)
-        // set as output and all high
+// set as output and all high
 
 
 #define key1_r ((PIND&(1<<7))==0)
@@ -132,7 +138,7 @@ static const byte font[77][5] PROGMEM = {
 #define keysetup() do{ DDRD&=0xff-(1<<7)-(1<<6)-(1<<5); PORTD|=(1<<7)+(1<<6)+(1<<5); }while(0)  //input, pull up
 
 
-byte leds[32];  //the screen array, 1 byte = 1 column, left to right, lsb at top. 
+byte leds[32];  //the screen array, 1 byte = 1 column, left to right, lsb at top.
 
 
 #define HTstartsys   0b100000000010 //start system oscillator
@@ -155,45 +161,45 @@ byte leds[32];  //the screen array, 1 byte = 1 column, left to right, lsb at top
 
 
 void HTsend(word data, byte bits) {  //MSB first
-  word bit=((word)1)<<(bits-1);
-  while(bit) {
-    HTclk0;
-    if (data & bit) HTdata1; else HTdata0;
-    HTclk1;
-    bit>>=1;
-  }
+	word bit=((word)1)<<(bits-1);
+	while(bit) {
+		HTclk0;
+		if (data & bit) HTdata1; else HTdata0;
+		HTclk1;
+		bit>>=1;
+	}
 }
 
 void HTcommand(word data) {
-  HTstrobe0;
-  HTsend(data,12);
-  HTstrobe1;
+	HTstrobe0;
+	HTsend(data,12);
+	HTstrobe1;
 }
 
 void HTsendscreen(void) {
-  HTstrobe0;
-  HTsend(HTwrite,10);
-  for (byte mtx=0;mtx<4;mtx++)  //sending 8x8-matrices left to right, rows top to bottom, MSB left
-    for (byte row=0;row<8;row++) {  //while leds[] is organized in columns for ease of use.
-      byte q=0;
-      for (byte col=0;col<8;col++)  q = (q<<1) | ( (leds[col+(mtx<<3)]>>row)&1 ) ;
-      HTsend(q,8);
-    }
-  HTstrobe1;
+	HTstrobe0;
+	HTsend(HTwrite,10);
+	for (byte mtx=0;mtx<4;mtx++)  //sending 8x8-matrices left to right, rows top to bottom, MSB left
+	for (byte row=0;row<8;row++) {  //while leds[] is organized in columns for ease of use.
+		byte q=0;
+		for (byte col=0;col<8;col++)  q = (q<<1) | ( (leds[col+(mtx<<3)]>>row)&1 ) ;
+		HTsend(q,8);
+	}
+	HTstrobe1;
 }
 
 
 void HTsetup() {  //setting up the display
-  HTcommand(HTstartsys);
-  HTcommand(HTledon);
-  HTcommand(HTsetclock);
-  HTcommand(HTsetlayout);
-  HTcommand(HTsetbright+(8<<1));
-  HTcommand(HTblinkoff);
+	HTcommand(HTstartsys);
+	HTcommand(HTledon);
+	HTcommand(HTsetclock);
+	HTcommand(HTsetlayout);
+	HTcommand(HTsetbright+(8<<1));
+	HTcommand(HTblinkoff);
 }
 
 void HTbrightness(byte b) {
-  HTcommand(HTsetbright + ((b&15)<<1) );
+	HTcommand(HTsetbright + ((b&15)<<1) );
 }
 
 
@@ -205,7 +211,7 @@ byte mode=0;
 byte src_changed = 0;
 byte key1=0, key2=0, key3=0;
 byte prev_key1, prev_key2, prev_key3;
-byte hr_mode=0;
+byte hr_mode=1;
 // End Global Variables
 
 
@@ -216,51 +222,51 @@ byte hr_mode=0;
 byte is_leap_year(const word yr) // Return 1 if leap year return 0 else.
 {
 	if (yr%400 == 0)
-		return 1;
+	return 1;
 	else if (yr%100 == 0)
-		return 0;
+	return 0;
 	else if (yr%4 == 0)
-		return 1;
+	return 1;
 	else
-		return 0;
+	return 0;
 }
 
 byte last_day(const word yr, const byte m) // Return last date of given year and month
 {
 	if ( m == 2 ) {
-		if ( is_leap_year(yr) ) 
-			return 29;
+		if ( is_leap_year(yr) )
+		return 29;
 		else
-			return 28;
+		return 28;
 	}
-	else if ( m < 8 ) { 
+	else if ( m < 8 ) {
 		if (m%2)
-			return 31;
+		return 31;
 		else
-			return 30;
+		return 30;
 	}
 	else {
 		if (m%2)
-			return 30;
+		return 30;
 		else
-			return 31;
+		return 31;
 	}
 }
 
 void incmonth() // Increase month
 {
 	if (month<12)
-		month++;
+	month++;
 	else {
-		year++;	
-		month=1;	
+		year++;
+		month=1;
 	}
 }
 
 void incday() // Increase day
 {
 	if (day<last_day(year, month))
-		day++;
+	day++;
 	else
 	{
 		incmonth();
@@ -278,49 +284,49 @@ void renderyear(void) { // Render Year
 	for (byte i=0;i<5;i++) {
 		if (setup && mode==2 && !key2 && !key3){ // Setup Year Mode
 			if (sec%2)
-				leds[col++]=pgm_read_byte(&font[(year/1000)][i]);
+			leds[col++]=pgm_read_byte(&font[(year/1000)][i]);
 			else
-	   	 		leds[col++]=0;
-   	 	}
-   	 	else {
-   	 		leds[col++]=pgm_read_byte(&font[(year/1000)][i]);
-	 	}
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[(year/1000)][i]);
+		}
 	}
 	
 	for (byte i=0;i<5;i++) {
 		if (setup && mode==2 && !key2 && !key3){ // Setup Year Mode
 			if (sec%2)
-				leds[col++]=pgm_read_byte(&font[((year%1000)/100)][i]);
+			leds[col++]=pgm_read_byte(&font[((year%1000)/100)][i]);
 			else
-	   	 		leds[col++]=0;
-   	 	}
-   	 	else {
-   	 		leds[col++]=pgm_read_byte(&font[((year%1000)/100)][i]);
-	 	}
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[((year%1000)/100)][i]);
+		}
 	}
 	
 	for (byte i=0;i<5;i++) {
 		if (setup && mode==2 && !key2 && !key3){ // Setup Year Mode
 			if (sec%2)
-				leds[col++]=pgm_read_byte(&font[((year%100)/10)][i]);
+			leds[col++]=pgm_read_byte(&font[((year%100)/10)][i]);
 			else
-	   	 		leds[col++]=0;
-   	 	}
-   	 	else {
-   	 		leds[col++]=pgm_read_byte(&font[((year%100)/10)][i]);
-	 	}
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[((year%100)/10)][i]);
+		}
 	}
 	
 	for (byte i=0;i<5;i++) {
 		if (setup && mode==2 && !key2 && !key3){ // Setup Year Mode
 			if (sec%2)
-				leds[col++]=pgm_read_byte(&font[(year%10)][i]);
+			leds[col++]=pgm_read_byte(&font[(year%10)][i]);
 			else
-	   	 		leds[col++]=0;
-   	 	}
-   	 	else {
-   	 		leds[col++]=pgm_read_byte(&font[(year%10)][i]);
-	 	}
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[(year%10)][i]);
+		}
 	}
 	
 	leds[col++]=0;
@@ -335,25 +341,25 @@ void renderyear(void) { // Render Year
 	leds[col++]=0;
 	
 }
-		
+
 
 void renderdate(void) { // Render Date
 
 	byte col = 0;
 	
 	leds[col++]=0;
-		
+	
 	for (byte i=0;i<5;i++) {
 		if (setup && mode==3 && !key2 && !key3){ // Setup Month Mode
 			if (sec%2)
-				leds[col++]=pgm_read_byte(&font[(month/10)][i]);
+			leds[col++]=pgm_read_byte(&font[(month/10)][i]);
 			else
-	   	 		leds[col++]=0;
-   	 	}
-   	 	else {
-   	 		leds[col++]=pgm_read_byte(&font[(month/10)][i]);
-	 	}
-   	 		
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[(month/10)][i]);
+		}
+		
 	}
 	
 	leds[col++]=0;
@@ -361,9 +367,9 @@ void renderdate(void) { // Render Date
 	for (byte i=0;i<5;i++) {
 		if (setup && mode==3 && !key2 && !key3){ // Setup Month Mode
 			if (sec%2)
-				leds[col++]=pgm_read_byte(&font[(month%10)][i]);
+			leds[col++]=pgm_read_byte(&font[(month%10)][i]);
 			else
-				leds[col++]=0;
+			leds[col++]=0;
 		}
 		else {
 			leds[col++]=pgm_read_byte(&font[(month%10)][i]);
@@ -373,7 +379,7 @@ void renderdate(void) { // Render Date
 	leds[col++]=0;
 	
 	for (byte i=0;i<5;i++) {
-		leds[col++]=pgm_read_byte(&font[69][i]);
+		leds[col++]=pgm_read_byte(&font[69][i]);  // -
 	}
 	
 	leds[col++]=0;
@@ -381,9 +387,9 @@ void renderdate(void) { // Render Date
 	for (byte i=0;i<5;i++) {
 		if (setup && mode==4 && !key2 && !key3){ // Setup Day Mode
 			if (sec%2)
-				leds[col++]=pgm_read_byte(&font[(day/10)][i]);
+			leds[col++]=pgm_read_byte(&font[(day/10)][i]);
 			else
-				leds[col++]=0;
+			leds[col++]=0;
 		}
 		else {
 			leds[col++]=pgm_read_byte(&font[(day/10)][i]);
@@ -395,9 +401,9 @@ void renderdate(void) { // Render Date
 	for (byte i=0;i<5;i++) {
 		if (setup && mode==4 && !key2 && !key3){ // Setup Day Mode
 			if (sec%2)
-				leds[col++]=pgm_read_byte(&font[(day%10)][i]);
+			leds[col++]=pgm_read_byte(&font[(day%10)][i]);
 			else
-				leds[col++]=0;
+			leds[col++]=0;
 		}
 		else {
 			leds[col++]=pgm_read_byte(&font[(day%10)][i]);
@@ -418,39 +424,39 @@ void renderdate(void) { // Render Date
 
 
 inline void clocksetup() {  // CLOCK, interrupt every second
-  ASSR |= (1<<AS2);    //timer2 async from external quartz
-  TCCR2=0b00000101;    //normal,off,/128; 32768Hz/256/128 = 1 Hz
-  TIMSK |= (1<<TOIE2); //enable timer2-overflow-int
-  sei();               //enable interrupts
+	ASSR |= (1<<AS2);    //timer2 async from external quartz
+	TCCR2=0b00000101;    //normal,off,/128; 32768Hz/256/128 = 1 Hz
+	TIMSK |= (1<<TOIE2); //enable timer2-overflow-int
+	sei();               //enable interrupts
 }
 
 
 // CLOCK interrupt
 ISR(TIMER2_OVF_vect) {     //timer2-overflow-int
-  sec++;
+	sec++;
 }
 
 
 
 void incsec(const byte add) {
-  sec+=add;
-  while (sec>=60) { 
-    sec-=60;  minute++;
-    while (minute>=60) {
-      minute -= 60;  hour++;
-      while (hour >=24) {
-        hour-=24;  incday();
-      }//24hours
-    }//60min
-  }//60sec
+	sec+=add;
+	while (sec>=60) {
+		sec-=60;  minute++;
+		while (minute>=60) {
+			minute -= 60;  hour++;
+			while (hour >=24) {
+				hour-=24;  incday();
+			}//24hours
+		}//60min
+	}//60sec
 }
 
 
 byte clockhandler(void) {
-  if (sec==sec0) return 0;   //check if something changed
-  sec0=sec;
-  incsec(0);  //just carry over
-  return 1;
+	if (sec==sec0) return 0;   //check if something changed
+	sec0=sec;
+	incsec(0);  //just carry over
+	return 1;
 }
 
 byte is_src_changed(void) {
@@ -459,109 +465,111 @@ byte is_src_changed(void) {
 		return 1;
 	}
 	else
-		return 0;
+	return 0;
 }
 
 
 //-------------------------------------------------------------------------------------- clock render ----------
 
 void renderclock(void) {
-  byte col=0;
-  byte tmp_hour;
-  if (!hr_mode) // 12 Hr Mode
-  {
-	  if (hour>12) 
-	  	tmp_hour = hour-12;
-	  else if (hour==0)
-	  	tmp_hour = 12;
-	  else
-	  	tmp_hour = hour;
-  }
-  else
-  {
-	  tmp_hour = hour;
-  }
-	    
-   for (byte i=0;i<5;i++) {
-	  if (setup && mode==0 && !key2 && !key3){ // Hour Setup Mode
-		  if (sec%2)
-		  	leds[col++]=pgm_read_byte(&font[(tmp_hour/10)][i]);
-		  else
-		  	leds[col++]=0;
-  		}
-	  else {
-		  leds[col++]=pgm_read_byte(&font[(tmp_hour/10)][i]);
-	  }
-  }
-  leds[col++]=0;
-  for (byte i=0;i<5;i++) {
-	  if (setup && mode==0 && !key2 && !key3){ // Hour Setup Mode
-	   	  if (sec%2)
-	   		leds[col++]=pgm_read_byte(&font[tmp_hour%10][i]);
-	   	  else
-	   	 	leds[col++]=0;
-  	  	}
-  	  else {
-	  	  leds[col++]=pgm_read_byte(&font[tmp_hour%10][i]);
-  	  }
-  }
-   	  	 	
-  leds[col++]=0;
-  //if (sec%2) {leds[col++]=0x66;leds[col++]=0x66;} else {leds[col++]=0; leds[col++]=0;} // Use this to blink colon
-  leds[col++]=0x66;leds[col++]=0x66; // Use this to not blink colon
-  leds[col++]=0;
-  
-  for (byte i=0;i<5;i++) {
-	  if (setup && mode == 1 && !key2 && !key3) { // Minute Setup Mode
-	  		if (sec%2)
-		  		leds[col++]=pgm_read_byte(&font[(minute/10)][i]);
-		  	else
-		  		leds[col++]=0;
-	  	}
-	  else {
-		  leds[col++]=pgm_read_byte(&font[minute/10][i]);
-	  }
-  }
-  
-  leds[col++]=0;
-  for (byte i=0;i<5;i++) {
-	  if (setup && mode == 1 && !key2 && !key3) { // Minute Setup Mode
-	  		if (sec%2)
-	  	  		leds[col++]=pgm_read_byte(&font[(minute%10)][i]);
-	  	  	else
-	  	  		leds[col++]=0;
-  	  	}
-	  else {
-		  leds[col++]=pgm_read_byte(&font[(minute%10)][i]);
-	  } 
-  }
- 
-  leds[col++]=0;
-  
-  if (!hr_mode) { // 12 Hour mode
-	  	if (hour>=12){ // PM
-	   		for (byte i=0;i<5;i++) {
-		   		leds[col++]=pgm_read_byte(&font['P'+upper_char_offset][i]);
-	   		}
-   		}
-   		else {  // AM
-  			for (byte i=0;i<5;i++) {
-		   		leds[col++]=pgm_read_byte(&font['A'+upper_char_offset][i]);
-	   		}	  			
-  		}
-  }
-  else {
-  
-  	leds[col++]=0;
-  	leds[col++]=0;
-  	leds[col++]=sec;
-  	leds[col++]=0;
-  	leds[col++]=0;
-  }
-  
+	byte col=0;
+	byte tmp_hour;
+	leds[col++]=0; //my
+	if (!hr_mode) // 12 Hr Mode
+	{
+		if (hour>12)
+		tmp_hour = hour-12;
+		else if (hour==0)
+		tmp_hour = 12;
+		else
+		tmp_hour = hour;
+	}
+	else
+	{
+		tmp_hour = hour;
+	}
+	
+	for (byte i=0;i<5;i++) {
+		if (setup && mode==0 && !key2 && !key3){ // Hour Setup Mode
+			if (sec%2)
+			leds[col++]=pgm_read_byte(&font[(tmp_hour/10)][i]);
+			else
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[(tmp_hour/10)][i]);
+		}
+	}
+	leds[col++]=0;
+	for (byte i=0;i<5;i++) {
+		if (setup && mode==0 && !key2 && !key3){ // Hour Setup Mode
+			if (sec%2)
+			leds[col++]=pgm_read_byte(&font[tmp_hour%10][i]);
+			else
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[tmp_hour%10][i]);
+		}
+	}
+	
+	leds[col++]=0;
+	//if (sec%2) {leds[col++]=0x66;leds[col++]=0x66;} else {leds[col++]=0; leds[col++]=0;} // Use this to blink colon
+	if (sec%2) {leds[col++]=0x24;} else {leds[col++]=0;} // Use this to blink colon // my
+	//  leds[col++]=0x66;leds[col++]=0x66; // Use this to not blink colon
+	leds[col++]=0;
+	
+	for (byte i=0;i<5;i++) {
+		if (setup && mode == 1 && !key2 && !key3) { // Minute Setup Mode
+			if (sec%2)
+			leds[col++]=pgm_read_byte(&font[(minute/10)][i]);
+			else
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[minute/10][i]);
+		}
+	}
+	
+	leds[col++]=0;
+	for (byte i=0;i<5;i++) {
+		if (setup && mode == 1 && !key2 && !key3) { // Minute Setup Mode
+			if (sec%2)
+			leds[col++]=pgm_read_byte(&font[(minute%10)][i]);
+			else
+			leds[col++]=0;
+		}
+		else {
+			leds[col++]=pgm_read_byte(&font[(minute%10)][i]);
+		}
+	}
+	
+	leds[col++]=0;
+	
+	//  if (!hr_mode) { // 12 Hour mode
+	//	  	if (hour>=12){ // PM
+	//	   		for (byte i=0;i<5;i++) {
+	//		   		leds[col++]=pgm_read_byte(&font['P'+upper_char_offset][i]);
+	//	   		}
+	//   		}
+	//   		else {  // AM
+	//  			for (byte i=0;i<5;i++) {
+	//		   		leds[col++]=pgm_read_byte(&font['A'+upper_char_offset][i]);
+	//	   		}
+	//  		}
+	//  }
+	//  else {
+	
+	leds[col++]=0;
+	leds[col++]=0;
+	leds[col++]=hour;
+	leds[col++]=minute;
+	leds[col++]=sec;
+	//  }
+	
 }
 
-void render_hr_mode(void) { 
+void render_hr_mode(void) {
 	byte col=0;
 	
 	leds[col++]=0;
@@ -599,243 +607,268 @@ void render_hr_mode(void) {
 // ====================== Clock Code End =============================
 
 
+//==================================================================== main ==================
+int main(void) {  
 
+	HTpinsetup();
+	HTsetup();
+	keysetup();
+	clocksetup();
+	
+	for (byte i=0;i<32;i++) leds[i]=0b01010101<<(i%2);  HTsendscreen();
 
-int main(void) {  //==================================================================== main ==================
+	byte key1_duration = 0;
+	byte clock_stat = 0;
+	byte count=0;
+	byte bright=3;
+	byte brights[4]={0,2,6,15}; //brightness levels
 
-  HTpinsetup();
-  HTsetup();
-  keysetup();
-  clocksetup();
-  
-  for (byte i=0;i<32;i++) leds[i]=0b01010101<<(i%2);  HTsendscreen();
+	
+	prev_key1 = 0;
+	prev_key2 = 0;
+	prev_key3 = 0;
+	
 
-  byte key1_duration = 0;
-  byte clock_stat = 0;
-  byte count=0;
-  byte bright=3;
-  byte brights[4]={0,2,6,15}; //brightness levels
+	setup = 0;
+	mode = 0;
+	// setup time and date on restart
+	
+	hour = 1;
+	minute = 0;
+	year = 2013;
+	month = 2;
+	day = 21;
+	
+	// todo read time and date from ds1302
+	rtc2_update(RTC2_VALUE);
+	hour = RTC2_VALUE->hours;
+	minute = RTC2_VALUE->minutes;
+	year = RTC2_VALUE->year;
+	month = RTC2_VALUE->month;
+	day = RTC2_VALUE->date;
+	
+	
+	
+	while(1){
+		
+		clock_stat = clockhandler();
+		
+		// Poll key with debounce
+		if (key1_r + key2_r + key3_r) {
+			if (count>250) {
+				key1=key1_r;
+				key2=key2_r;
+				key3=key3_r;
+				count=0;
+			}
+			else
+			{
+				count++;
+			}
+		}
+		else
+		{
+			key1 = 0;
+			key2 = 0;
+			key3 = 0;
+			count=0;
+		} // Poll key end
+		
 
-  
-  prev_key1 = 0;
-  prev_key2 = 0;
-  prev_key3 = 0;
-  
+		// Setup Mode
+		if (setup){ // Set time
+			if (key1) { // Change Mode
 
-  setup = 0;
-  mode = 0;
-  hour=1;minute=0;
-  year=2012;month=1;day=1;
-  
-    	while(1){
-	    	
-	    	clock_stat = clockhandler();
-	    		    	
-	    	// Poll key with debounce
-	    	if (key1_r + key2_r + key3_r) {
-		    	if (count>250) {
-			    	key1=key1_r;
-			    	key2=key2_r;
-			    	key3=key3_r;
-			    	count=0;
-		    	}
-		    	else
-		    	{
-			    	count++;
-		    	}
-	    	}
-	    	else
-	    	{
-		    	key1 = 0;
-		    	key2 = 0;
-		    	key3 = 0;
-		    	count=0;
-	    	} // Poll key end
-	    	
-
-	    	// Setup Mode
-	    		if (setup){ // Set time
-	  				if (key1) { // Change Mode
-
-							if (prev_key1) {
-						  		if (clock_stat) key1_duration++; 
-					  		}
-					  		else {
-						  		key1_duration = 0;
-						  		mode++;
-					  		}
-					  		
-							if (key1_duration == 3) {
-			  						setup=0; 
-									mode=0;
-									key1_duration = 0;
-							}
-					}
-					else {
-							key1_duration = 0;
-					}
-
-	  				
-	  				if (mode==0) { // Hour
-	  						if (key2 && !prev_key2) { // Increase Hour
-	  							src_changed = 1;
-	  							
-	  							if (hour<23)
-	  								hour++;
-	  							else
-	  								hour=0;
-  							}
-  							else if (key3 && !prev_key3) { // Decrease Hour
-  								src_changed = 1;
-  								
-  								if (hour>0)
-  									hour--;
-  								else
-  									hour=23;
-							}
-						}
-					else if (mode==1) { // Minute
-							if (key2 && !prev_key2) { // Increase Minute
-								src_changed = 1;
-								
-								if (minute<59)
-									minute++;
-								else
-									minute=0;
-							}
-							else if (key3 && !prev_key3) { // Decrease Minute
-								src_changed = 1;
-								
-								if (minute>0)
-									minute--;
-								else
-									minute=59;
-							}
-						}
-					else if (mode==2) { // Year
-							if (key2 && !prev_key2) { // Increase Year
-								src_changed = 1;
-								year++;
-								
-							}
-							else if (key3 && !prev_key3) { // Decrease Month
-								src_changed = 1;
-								year--;
-							}
-						}					
-					else if (mode==3) { // Month
-							if (key2 && !prev_key2) { // Increase Month
-								src_changed = 1;
-								
-								if (month<12)
-									month++;
-								else
-									month=1;
-							}
-							else if (key3 && !prev_key3) { // Decrease Month
-								src_changed = 1;
-								
-								if (month>1)
-									month--;
-								else
-									month=12;
-							}
-						}
-					else if (mode==4) { // Day
-							if (key2 && !prev_key2) { // Increase Day
-								src_changed = 1;
-								
-								if (day<last_day(year, month))
-									day++;
-								else
-									day=1;
-							}
-							else if (key3 && !prev_key3) { // Decrease Day
-								src_changed = 1;
-								
-								if (day>1)
-									day--;
-								else
-									day=last_day(year, month);
-							}
-						}
-					else if (mode==5) { // 24 hr Mode Select
-						if ((key2 && !prev_key2) || (key3 && !prev_key3)) {
-								if (hr_mode)
-									hr_mode=0;
-								else
-									hr_mode=1;
-							}
-						}
-				
-					else { // Exit Setup
-						mode = 0;
-						setup = 0;
-					}
-				}
-					    		
-				else { // Normal Operation
-					// Process Keys	
-				    if (key1) {
-					    
-					  		if (prev_key1) {
-						  		if (clock_stat) key1_duration++; 
-					  		}
-					  		else {
-						  		key1_duration = 0;
-					  		}
-					  		
-					  		
-							if (key1_duration==3) { // Enter or Exit setup mode if key1 is pressed for 3 seconds.
-								
-								setup=1;
-								mode=0;
-								key1_duration = 0;
-							} 
-					}
-					else if (key2 && !prev_key2) { // Display Date
-							if (mode!=6)
-								mode=6;
-							else
-								mode=0;
-						}
-					else if (key3 && !prev_key3) { //only once per press
-							bright=(bright+1)%4; HTbrightness(brights[bright]);
-						} 
-					else {
-							key1_duration = 0; 
-						}
-					// End Process Keys
-				}
-			
-				
-			
-			// Update Diplay
-						
-			if (clock_stat || is_src_changed()) {	
-				if (mode==6 || (setup && (mode == 3 || mode == 4 ))) {
-					renderdate();
-				}
-				else if (setup && mode == 2) {
-					renderyear();
-				}
-				else if (setup && mode == 5) {
-					render_hr_mode();
+				if (prev_key1) {
+					if (clock_stat) key1_duration++;
 				}
 				else {
-					renderclock();
+					key1_duration = 0;
+					mode++;
 				}
-				HTsendscreen();
+				
+				if (key1_duration == 3) {
+					setup=0;
+					mode=0;
+					key1_duration = 0;
+				}
+			}
+			else {
+				key1_duration = 0;
+			}
+
+			
+			if (mode==0) { // Hour
+				if (key2 && !prev_key2) { // Increase Hour
+					src_changed = 1;
+					
+					if (hour<23)
+					hour++;
+					else
+					hour=0;
+				}
+				else if (key3 && !prev_key3) { // Decrease Hour
+					src_changed = 1;
+					
+					if (hour>0)
+					hour--;
+					else
+					hour=23;
+				}
+			}
+			else if (mode==1) { // Minute
+				if (key2 && !prev_key2) { // Increase Minute
+					src_changed = 1;
+					
+					if (minute<59)
+					minute++;
+					else
+					minute=0;
+				}
+				else if (key3 && !prev_key3) { // Decrease Minute
+					src_changed = 1;
+					
+					if (minute>0)
+					minute--;
+					else
+					minute=59;
+				}
+			}
+			else if (mode==2) { // Year
+				if (key2 && !prev_key2) { // Increase Year
+					src_changed = 1;
+					year++;
+					
+				}
+				else if (key3 && !prev_key3) { // Decrease Month
+					src_changed = 1;
+					year--;
+				}
+			}
+			else if (mode==3) { // Month
+				if (key2 && !prev_key2) { // Increase Month
+					src_changed = 1;
+					
+					if (month<12)
+					month++;
+					else
+					month=1;
+				}
+				else if (key3 && !prev_key3) { // Decrease Month
+					src_changed = 1;
+					
+					if (month>1)
+					month--;
+					else
+					month=12;
+				}
+			}
+			else if (mode==4) { // Day
+				if (key2 && !prev_key2) { // Increase Day
+					src_changed = 1;
+					
+					if (day<last_day(year, month))
+					day++;
+					else
+					day=1;
+				}
+				else if (key3 && !prev_key3) { // Decrease Day
+					src_changed = 1;
+					
+					if (day>1)
+					day--;
+					else
+					day=last_day(year, month);
+				}
+			}
+			else if (mode==5) { // 24 hr Mode Select
+				if ((key2 && !prev_key2) || (key3 && !prev_key3)) {
+					if (hr_mode)
+					hr_mode=0;
+					else
+					hr_mode=1;
+				}
 			}
 			
-			
-			// Update key status.
-			prev_key1 = key1;
-			prev_key2 = key2;
-			prev_key3 = key3;
-			
-		  	
+			else { // Exit Setup
+				mode = 0;
+				setup = 0;
+// modify version 1.1
+// Write time and date to DS1302			
+				RTC2_VALUE->seconds = 0;
+				RTC2_VALUE->minutes = minute;
+				RTC2_VALUE->hours = hour;
+				RTC2_VALUE->date = day;
+				RTC2_VALUE->month = month;
+				RTC2_VALUE->year = year;
+				RTC2_VALUE->format = RTC2_FORMAT_24;
+				rtc2_preset(RTC2_VALUE);
+// end modify
+			}
 		}
-			
-    return(0);
+		
+		else { // Normal Operation
+			// Process Keys
+			if (key1) {
+				
+				if (prev_key1) {
+					if (clock_stat) key1_duration++;
+				}
+				else {
+					key1_duration = 0;
+				}
+				
+				
+				if (key1_duration==3) { // Enter or Exit setup mode if key1 is pressed for 3 seconds.
+					
+					setup=1;
+					mode=0;
+					key1_duration = 0;
+				}
+			}
+			else if (key2 && !prev_key2) { // Display Date
+				if (mode!=6)
+				mode=6;
+				else
+				mode=0;
+			}
+			else if (key3 && !prev_key3) { //only once per press
+				bright=(bright+1)%4; HTbrightness(brights[bright]);
+			}
+			else {
+				key1_duration = 0;
+			}
+			// End Process Keys
+		}
+		
+		
+		
+		// Update Diplay
+		
+		if (clock_stat || is_src_changed()) {
+			if (mode==6 || (setup && (mode == 3 || mode == 4 ))) {
+				renderdate();
+			}
+			else if (setup && mode == 2) {
+				renderyear();
+			}
+			else if (setup && mode == 5) {
+				render_hr_mode();
+			}
+			else {
+				renderclock();
+			}
+			HTsendscreen();
+		}
+		
+		
+		// Update key status.
+		prev_key1 = key1;
+		prev_key2 = key2;
+		prev_key3 = key3;
+		
+		
+	}
+	
+	return(0);
 }//main
